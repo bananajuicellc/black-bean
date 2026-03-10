@@ -1,4 +1,4 @@
-package com.blackbean.shared
+package com.adzuki.shared
 
 import kotlin.test.Test
 import kotlin.test.assertEquals

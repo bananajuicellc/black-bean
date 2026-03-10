@@ -1,4 +1,4 @@
-package com.blackbean.shared
+package com.adzuki.shared
 
 class Greeting {
     fun greet(): String {

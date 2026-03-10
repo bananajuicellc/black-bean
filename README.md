@@ -1,6 +1,8 @@
-# black-bean
+# adzuki
 
-A literate Beancount implementation.
+A literate Beancount implementation in Rust.
+
+Why the name "adzuki"? Adzuki beans are rust-colored (a nod to the fact that this project is built in Rust), and their association with Beancount makes for a perfect pairing (as adzuki is a type of bean). Furthermore, it reflects a love for Japanese food, where adzuki beans are commonly used in both sweet and savory dishes.
 
 ## Motivation
 
@@ -14,7 +16,7 @@ To further aid in readability and usability, this project embraces [Literate Pro
 
 ## Roadmap
 
-In addition to the core application, the long-term vision for `black-bean` includes providing library packages that can be used to programmatically generate reports. Planned features include:
+In addition to the core application, the long-term vision for `adzuki` includes providing library packages that can be used to programmatically generate reports. Planned features include:
 
 - A cross-platform application for managing literate Beancount files.
 - A Python wrapper that mimics the report generating capabilities of the original `beancount` package, allowing for seamless integration with existing tools and scripts.
