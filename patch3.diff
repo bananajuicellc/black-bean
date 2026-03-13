@@ -1,0 +1,13 @@
+--- rust/adzuki/src/bin/bean-check.rs
++++ rust/adzuki/src/bin/bean-check.rs
+@@ -8,8 +8,8 @@
+ fn get_line_and_col(source: &str, byte_offset: usize) -> (usize, usize) {
+     let mut line = 1;
+     let mut col = 1;
+-    for (i, c) in source.chars().enumerate() {
+-        if i == byte_offset {
++    for (byte_idx, c) in source.char_indices() {
++        if byte_idx == byte_offset {
+             break;
+         }
+         if c == '\n' {
