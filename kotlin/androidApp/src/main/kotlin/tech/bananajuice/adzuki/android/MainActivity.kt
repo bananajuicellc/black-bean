@@ -40,9 +40,19 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.Composable
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import androidx.lifecycle.viewmodel.compose.viewModel
 import tech.bananajuice.adzuki.shared.mvi.Block
 import tech.bananajuice.adzuki.shared.mvi.BlockEditor
 import tech.bananajuice.adzuki.shared.mvi.CodeBlock
@@ -60,15 +70,156 @@ sealed class Screen {
     data class Editor(val fileUri: String, val journalUri: String) : Screen()
 }
 
+data class JournalInfo(val name: String, val uri: String)
+data class FileInfo(val name: String, val uri: String)
+
+data class MainState(
+    val currentScreen: Screen = Screen.SelectFolder,
+    val journals: List<JournalInfo> = emptyList(),
+    val files: List<FileInfo> = emptyList()
+)
+
+sealed class MainIntent {
+    data class SelectRootFolder(val uri: String) : MainIntent()
+    data class OpenJournal(val journalUri: String) : MainIntent()
+    data class CreateJournal(val rootUri: String, val name: String) : MainIntent()
+    data class OpenFile(val fileUri: String, val journalUri: String) : MainIntent()
+    object NavigateBack : MainIntent()
+}
+
+class MainViewModel(application: Application) : AndroidViewModel(application) {
+    private val prefs = application.getSharedPreferences("adzuki_prefs", Context.MODE_PRIVATE)
+
+    private val _state = MutableStateFlow(
+        MainState(
+            currentScreen = prefs.getString("root_folder_uri", null)?.let { Screen.JournalList(it) } ?: Screen.SelectFolder
+        )
+    )
+    val state = _state.asStateFlow()
+
+    init {
+        val currentScreen = _state.value.currentScreen
+        if (currentScreen is Screen.JournalList) {
+            loadJournals(currentScreen.rootUri)
+        }
+    }
+
+    fun processIntent(intent: MainIntent) {
+        when (intent) {
+            is MainIntent.SelectRootFolder -> {
+                prefs.edit().putString("root_folder_uri", intent.uri).apply()
+                _state.update { it.copy(currentScreen = Screen.JournalList(intent.uri)) }
+                loadJournals(intent.uri)
+            }
+            is MainIntent.OpenJournal -> {
+                viewModelScope.launch(Dispatchers.IO) {
+                    val journalUriStr = intent.journalUri
+                    val mainFileUriStr = prefs.getString("main_file_$journalUriStr", null)
+
+                    val fileToOpen = if (mainFileUriStr != null && DocumentFile.fromSingleUri(getApplication(), Uri.parse(mainFileUriStr))?.exists() == true) {
+                        mainFileUriStr
+                    } else {
+                        val folder = DocumentFile.fromTreeUri(getApplication(), Uri.parse(journalUriStr))
+                        val files = folder?.listFiles() ?: emptyArray()
+                        val mainBeancountMd = files.find { it.name == "main.beancount.md" }
+                        val mainBeancount = files.find { it.name == "main.beancount" }
+                        mainBeancountMd?.uri?.toString() ?: mainBeancount?.uri?.toString()
+                    }
+
+                    if (fileToOpen != null) {
+                        _state.update { it.copy(currentScreen = Screen.Editor(fileToOpen, journalUriStr)) }
+                    } else {
+                        _state.update { it.copy(currentScreen = Screen.FileList(journalUriStr)) }
+                        loadFiles(journalUriStr)
+                    }
+                }
+            }
+            is MainIntent.CreateJournal -> {
+                viewModelScope.launch(Dispatchers.IO) {
+                    val rootFolder = DocumentFile.fromTreeUri(getApplication(), Uri.parse(intent.rootUri))
+                    val newDir = rootFolder?.createDirectory(intent.name)
+                    if (newDir != null) {
+                        val newFile = newDir.createFile("text/markdown", "main.beancount.md")
+                        if (newFile != null) {
+                            getApplication<Application>().contentResolver.openOutputStream(newFile.uri)?.use {
+                                it.write("# ${intent.name}\n\n".toByteArray())
+                            }
+                            // Update state on Main Thread implicitly by flow collection
+                            _state.update { it.copy(currentScreen = Screen.Editor(newFile.uri.toString(), newDir.uri.toString())) }
+                            // Reload journals so the new one is listed if they go back
+                            loadJournals(intent.rootUri)
+                        }
+                    }
+                }
+            }
+            is MainIntent.OpenFile -> {
+                prefs.edit().putString("main_file_${intent.journalUri}", intent.fileUri).apply()
+                _state.update { it.copy(currentScreen = Screen.Editor(intent.fileUri, intent.journalUri)) }
+            }
+            is MainIntent.NavigateBack -> {
+                val currentScreen = _state.value.currentScreen
+                when (currentScreen) {
+                    is Screen.Editor -> {
+                        _state.update { it.copy(currentScreen = Screen.FileList(currentScreen.journalUri)) }
+                        loadFiles(currentScreen.journalUri)
+                    }
+                    is Screen.FileList -> {
+                        val rootUri = prefs.getString("root_folder_uri", null)
+                        if (rootUri != null) {
+                            _state.update { it.copy(currentScreen = Screen.JournalList(rootUri)) }
+                            loadJournals(rootUri)
+                        } else {
+                            _state.update { it.copy(currentScreen = Screen.SelectFolder) }
+                        }
+                    }
+                    is Screen.JournalList -> {
+                        // For root JournalList, back usually exits the app (handled by Compose / System),
+                        // but we could explicitly do nothing or handle it if needed.
+                    }
+                    is Screen.SelectFolder -> {
+                        // Do nothing
+                    }
+                }
+            }
+        }
+    }
+
+    private fun loadJournals(rootUri: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val rootFolder = DocumentFile.fromTreeUri(getApplication(), Uri.parse(rootUri))
+            val journals = mutableListOf<JournalInfo>()
+            rootFolder?.listFiles()?.forEach { file ->
+                if (file.isDirectory) {
+                    journals.add(JournalInfo(name = file.name ?: "Unknown", uri = file.uri.toString()))
+                }
+            }
+            _state.update { it.copy(journals = journals) }
+        }
+    }
+
+    private fun loadFiles(journalUri: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val journalFolder = DocumentFile.fromTreeUri(getApplication(), Uri.parse(journalUri))
+            val filesList = mutableListOf<FileInfo>()
+            journalFolder?.listFiles()?.forEach { file ->
+                if (file.isFile) {
+                    filesList.add(FileInfo(name = file.name ?: "Unknown", uri = file.uri.toString()))
+                }
+            }
+            _state.update { it.copy(files = filesList) }
+        }
+    }
+}
+
 @Composable
-fun SelectFolderScreen(onFolderSelected: (String) -> Unit) {
+fun SelectFolderScreen(onIntent: (MainIntent) -> Unit) {
     val context = LocalContext.current
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             val takeFlags: Int = Intent.FLAG_GRANT_READ_URI_PERMISSION or
                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             context.contentResolver.takePersistableUriPermission(uri, takeFlags)
-            onFolderSelected(uri.toString())
+            onIntent(MainIntent.SelectRootFolder(uri.toString()))
         }
     }
 
@@ -80,47 +231,22 @@ fun SelectFolderScreen(onFolderSelected: (String) -> Unit) {
 }
 
 @Composable
-fun JournalListScreen(rootUri: String, onJournalSelected: (String, String?) -> Unit) {
-    val context = LocalContext.current
-    val rootFolder = remember(rootUri) { DocumentFile.fromTreeUri(context, Uri.parse(rootUri)) }
-    val journals = remember { mutableStateListOf<DocumentFile>() }
+fun JournalListScreen(state: MainState, onIntent: (MainIntent) -> Unit) {
+    val rootUri = (state.currentScreen as? Screen.JournalList)?.rootUri ?: return
     var showNewJournalDialog by remember { mutableStateOf(false) }
     var newJournalName by remember { mutableStateOf("") }
-    val prefs = context.getSharedPreferences("adzuki_prefs", Context.MODE_PRIVATE)
-
-    LaunchedEffect(rootUri) {
-        journals.clear()
-        rootFolder?.listFiles()?.forEach { file ->
-            if (file.isDirectory) {
-                journals.add(file)
-            }
-        }
-    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Button(onClick = { showNewJournalDialog = true }, modifier = Modifier.padding(16.dp)) {
             Text("New Journal")
         }
         LazyColumn(modifier = Modifier.weight(1f)) {
-            items(journals) { journal ->
+            items(state.journals) { journal ->
                 Text(
-                    text = journal.name ?: "Unknown",
+                    text = journal.name,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable {
-                            val journalUriStr = journal.uri.toString()
-                            val mainFileUriStr = prefs.getString("main_file_$journalUriStr", null)
-
-                            if (mainFileUriStr != null && DocumentFile.fromSingleUri(context, Uri.parse(mainFileUriStr))?.exists() == true) {
-                                onJournalSelected(journalUriStr, mainFileUriStr)
-                            } else {
-                                val files = journal.listFiles()
-                                val mainBeancountMd = files.find { it.name == "main.beancount.md" }
-                                val mainBeancount = files.find { it.name == "main.beancount" }
-                                val fileUri = mainBeancountMd?.uri ?: mainBeancount?.uri
-                                onJournalSelected(journalUriStr, fileUri?.toString())
-                            }
-                        }
+                        .clickable { onIntent(MainIntent.OpenJournal(journal.uri)) }
                         .padding(16.dp)
                 )
             }
@@ -140,16 +266,7 @@ fun JournalListScreen(rootUri: String, onJournalSelected: (String, String?) -> U
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val newDir = rootFolder?.createDirectory(newJournalName)
-                    if (newDir != null) {
-                        val newFile = newDir.createFile("text/markdown", "main.beancount.md")
-                        if (newFile != null) {
-                            context.contentResolver.openOutputStream(newFile.uri)?.use {
-                                it.write("# $newJournalName\n\n".toByteArray())
-                            }
-                            onJournalSelected(newDir.uri.toString(), newFile.uri.toString())
-                        }
-                    }
+                    onIntent(MainIntent.CreateJournal(rootUri, newJournalName))
                     showNewJournalDialog = false
                     newJournalName = ""
                 }) {
@@ -167,26 +284,19 @@ fun JournalListScreen(rootUri: String, onJournalSelected: (String, String?) -> U
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FileListScreen(journalUri: String, onFileSelected: (String) -> Unit, onBack: () -> Unit) {
+fun FileListScreen(state: MainState, onIntent: (MainIntent) -> Unit) {
+    val journalUri = (state.currentScreen as? Screen.FileList)?.journalUri ?: return
     val context = LocalContext.current
     val journalFolder = remember(journalUri) { DocumentFile.fromTreeUri(context, Uri.parse(journalUri)) }
-    val files = remember { mutableStateListOf<DocumentFile>() }
 
-    LaunchedEffect(journalUri) {
-        files.clear()
-        journalFolder?.listFiles()?.forEach { file ->
-            if (file.isFile) {
-                files.add(file)
-            }
-        }
-    }
+    BackHandler { onIntent(MainIntent.NavigateBack) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(journalFolder?.name ?: "Files") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = { onIntent(MainIntent.NavigateBack) }) {
                         Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
@@ -194,12 +304,12 @@ fun FileListScreen(journalUri: String, onFileSelected: (String) -> Unit, onBack:
         }
     ) { padding ->
         LazyColumn(modifier = Modifier.padding(padding).fillMaxSize()) {
-            items(files) { file ->
+            items(state.files) { file ->
                 Text(
-                    text = file.name ?: "Unknown",
+                    text = file.name,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { onFileSelected(file.uri.toString()) }
+                        .clickable { onIntent(MainIntent.OpenFile(file.uri, journalUri)) }
                         .padding(16.dp)
                 )
             }
@@ -219,10 +329,13 @@ fun mapParseTreeToBlocks(tree: ParseTree): List<Block> {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EditorScreen(fileUri: String, onBack: () -> Unit) {
+fun EditorScreen(state: MainState, onIntent: (MainIntent) -> Unit) {
+    val fileUri = (state.currentScreen as? Screen.Editor)?.fileUri ?: return
     val context = LocalContext.current
     val uri = Uri.parse(fileUri)
     val file = DocumentFile.fromSingleUri(context, uri)
+
+    BackHandler { onIntent(MainIntent.NavigateBack) }
 
     val initialText = remember(fileUri) {
         try {
@@ -243,14 +356,14 @@ fun EditorScreen(fileUri: String, onBack: () -> Unit) {
             )
         )
     }
-    val state by viewModel.state.collectAsState()
+    val editorState by viewModel.state.collectAsState()
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(file?.name ?: "Editor") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = { onIntent(MainIntent.NavigateBack) }) {
                         Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
@@ -259,7 +372,7 @@ fun EditorScreen(fileUri: String, onBack: () -> Unit) {
     ) { padding ->
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
             BlockEditor(
-                state = state,
+                state = editorState,
                 onIntent = viewModel::processIntent
             )
         }
@@ -276,59 +389,30 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val prefs = getSharedPreferences("adzuki_prefs", Context.MODE_PRIVATE)
-        val rootFolderUri = prefs.getString("root_folder_uri", null)
-
         setContent {
             MaterialTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    var currentScreen by remember {
-                        mutableStateOf<Screen>(
-                            if (rootFolderUri != null) Screen.JournalList(rootFolderUri)
-                            else Screen.SelectFolder
-                        )
-                    }
+                    val viewModel: MainViewModel = viewModel()
+                    val state by viewModel.state.collectAsState()
 
-                    when (val screen = currentScreen) {
+                    when (state.currentScreen) {
                         is Screen.SelectFolder -> SelectFolderScreen(
-                            onFolderSelected = { uri ->
-                                prefs.edit().putString("root_folder_uri", uri).apply()
-                                currentScreen = Screen.JournalList(uri)
-                            }
+                            onIntent = viewModel::processIntent
                         )
                         is Screen.JournalList -> JournalListScreen(
-                            rootUri = screen.rootUri,
-                            onJournalSelected = { journalUri, fileUri ->
-                                if (fileUri != null) {
-                                    currentScreen = Screen.Editor(fileUri, journalUri)
-                                } else {
-                                    currentScreen = Screen.FileList(journalUri)
-                                }
-                            }
+                            state = state,
+                            onIntent = viewModel::processIntent
                         )
                         is Screen.FileList -> FileListScreen(
-                            journalUri = screen.journalUri,
-                            onFileSelected = { fileUri ->
-                                prefs.edit().putString("main_file_${screen.journalUri}", fileUri).apply()
-                                currentScreen = Screen.Editor(fileUri, screen.journalUri)
-                            },
-                            onBack = {
-                                val rootUri = prefs.getString("root_folder_uri", null)
-                                if (rootUri != null) {
-                                    currentScreen = Screen.JournalList(rootUri)
-                                } else {
-                                    currentScreen = Screen.SelectFolder
-                                }
-                            }
+                            state = state,
+                            onIntent = viewModel::processIntent
                         )
                         is Screen.Editor -> EditorScreen(
-                            fileUri = screen.fileUri,
-                            onBack = {
-                                currentScreen = Screen.FileList(screen.journalUri)
-                            }
+                            state = state,
+                            onIntent = viewModel::processIntent
                         )
                     }
                 }
