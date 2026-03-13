@@ -5,6 +5,13 @@ use nom::{
     IResult,
 };
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct BeancountParseError {
+    pub span: std::ops::Range<usize>,
+    pub message: String,
+}
+
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TokenSlice<'a>(pub &'a [SpannedToken<BeancountToken>]);
 
@@ -286,8 +293,9 @@ pub fn parse_transaction<'a>(
 pub fn parse_beancount<'a>(
     source: &'a str,
     tokens: &'a [SpannedToken<BeancountToken>],
-) -> Vec<BeancountNode> {
+) -> (Vec<BeancountNode>, Vec<BeancountParseError>) {
     let mut nodes = vec![];
+    let mut errors = vec![];
     let mut i = TokenSlice(tokens);
 
     while !i.0.is_empty() {
@@ -320,9 +328,14 @@ pub fn parse_beancount<'a>(
             }
         }
 
+        errors.push(BeancountParseError {
+            span: i.0[0].1.clone(),
+            message: format!("Unexpected token: {:?}", i.0[0].0),
+        });
+
         // skip one token if parse fails to prevent infinite loop
         i = TokenSlice(&i.0[1..]);
     }
 
-    nodes
+    (nodes, errors)
 }

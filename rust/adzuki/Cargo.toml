@@ -14,3 +14,7 @@ uniffi = { version = "0.31.0", features = ["cli"] }
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/uniffi_bindgen.rs"
+
+[[bin]]
+name = "bean-check"
+path = "src/bin/bean-check.rs"

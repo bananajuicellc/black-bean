@@ -50,7 +50,7 @@ pub fn parse_to_tree(source: String) -> ast::ParseTree {
                         }
 
                         let bc_tokens = lex_beancount(&block_content);
-                        let beancount_nodes = beancount_parser::parse_beancount(&block_content, &bc_tokens);
+                        let (beancount_nodes, _errors) = beancount_parser::parse_beancount(&block_content, &bc_tokens);
                         ast_nodes.push(ast::AstNode::Beancount { nodes: beancount_nodes });
                         continue;
                     }
