@@ -47,6 +47,7 @@ import androidx.documentfile.provider.DocumentFile
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import android.widget.Toast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -370,8 +371,6 @@ class MainActivity : ComponentActivity() {
                             val uri = Uri.parse(fileUri)
                             val file = DocumentFile.fromSingleUri(context, uri)
 
-                            BackHandler { viewModel.processIntent(MainIntent.NavigateBack) }
-
                             val initialText = remember(fileUri) {
                                 try {
                                     context.contentResolver.openInputStream(uri)?.use { inputStream ->
@@ -390,10 +389,29 @@ class MainActivity : ComponentActivity() {
                                     parserProxy = { text ->
                                         val parseTree = parseToTree(text)
                                         mapParseTreeToNodes(parseTree)
+                                    },
+                                    onSave = { newText ->
+                                        coroutineScope.launch(Dispatchers.IO) {
+                                            try {
+                                                context.contentResolver.openOutputStream(uri, "wt")?.use { outputStream ->
+                                                    outputStream.write(newText.toByteArray())
+                                                }
+                                            } catch (e: Exception) {
+                                                e.printStackTrace()
+                                                coroutineScope.launch(Dispatchers.Main) {
+                                                    Toast.makeText(context, "Error saving document: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        }
                                     }
                                 )
                             }
                             val editorState by docViewModel.state.collectAsState()
+
+                            BackHandler {
+                                docViewModel.processIntent(tech.bananajuice.adzuki.shared.mvi.DocumentIntent.SaveNow)
+                                viewModel.processIntent(MainIntent.NavigateBack)
+                            }
 
                             Scaffold(
                                 topBar = {
@@ -401,7 +419,10 @@ class MainActivity : ComponentActivity() {
                                     TopAppBar(
                                         title = { Text(file?.name ?: "Editor") },
                                         navigationIcon = {
-                                            IconButton(onClick = { viewModel.processIntent(MainIntent.NavigateBack) }) {
+                                            IconButton(onClick = {
+                                                docViewModel.processIntent(tech.bananajuice.adzuki.shared.mvi.DocumentIntent.SaveNow)
+                                                viewModel.processIntent(MainIntent.NavigateBack)
+                                            }) {
                                                 Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
                                             }
                                         }
