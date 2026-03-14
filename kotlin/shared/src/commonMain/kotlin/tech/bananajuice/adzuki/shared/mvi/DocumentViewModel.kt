@@ -13,13 +13,16 @@ import kotlinx.coroutines.launch
 class DocumentViewModel(
     initialState: DocumentState = DocumentState(),
     private val parseDebounceMs: Long = 300L,
+    private val saveDebounceMs: Long = 3000L,
     private val coroutineScope: CoroutineScope,
-    private val parserProxy: (String) -> List<DocumentNode>
+    private val parserProxy: (String) -> List<DocumentNode>,
+    private val onSave: ((String) -> Unit)? = null
 ) {
     private val _state = MutableStateFlow(initialState)
     val state: StateFlow<DocumentState> = _state.asStateFlow()
 
     private var parseJob: Job? = null
+    private var saveJob: Job? = null
 
     init {
         // Initial parse
@@ -39,6 +42,14 @@ class DocumentViewModel(
                 parseJob = coroutineScope.launch(Dispatchers.Default) {
                     delay(parseDebounceMs)
                     parseText(intent.newText)
+                }
+
+                if (onSave != null) {
+                    saveJob?.cancel()
+                    saveJob = coroutineScope.launch(Dispatchers.Default) {
+                        delay(saveDebounceMs)
+                        onSave.invoke(intent.newText)
+                    }
                 }
             }
         }

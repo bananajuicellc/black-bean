@@ -390,6 +390,17 @@ class MainActivity : ComponentActivity() {
                                     parserProxy = { text ->
                                         val parseTree = parseToTree(text)
                                         mapParseTreeToNodes(parseTree)
+                                    },
+                                    onSave = { newText ->
+                                        coroutineScope.launch(Dispatchers.IO) {
+                                            try {
+                                                context.contentResolver.openOutputStream(uri, "wt")?.use { outputStream ->
+                                                    outputStream.write(newText.toByteArray())
+                                                }
+                                            } catch (e: Exception) {
+                                                e.printStackTrace()
+                                            }
+                                        }
                                     }
                                 )
                             }
