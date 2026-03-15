@@ -53,6 +53,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import androidx.room.Room
+import tech.bananajuice.adzuki.android.data.AdzukiDatabase
+import tech.bananajuice.adzuki.android.data.RoomFoldStateRepository
 import androidx.lifecycle.viewmodel.compose.viewModel
 import tech.bananajuice.adzuki.shared.mvi.BeancountNode
 import tech.bananajuice.adzuki.shared.mvi.DocumentEditor
@@ -369,6 +372,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        val db = Room.databaseBuilder(
+            applicationContext,
+            AdzukiDatabase::class.java, "adzuki-database"
+        ).build()
+
+        val foldStateRepository = RoomFoldStateRepository(db.foldedHeadingDao())
+
         setContent {
             MaterialTheme {
                 Surface(
@@ -412,7 +422,7 @@ class MainActivity : ComponentActivity() {
                                     initialState = DocumentState(text = initialText),
                                     coroutineScope = coroutineScope,
                                     documentId = fileUri,
-                                    foldStateRepository = (application as AdzukiApplication).foldStateRepository,
+                                    foldStateRepository = foldStateRepository,
                                     parserProxy = { text ->
                                         val parseTree = parseToTree(text)
                                         mapParseTreeToNodes(parseTree)
