@@ -66,51 +66,53 @@ impl Transaction {
         let mut sums_by_currency: HashMap<String, Decimal> = HashMap::new();
 
         for (i, p) in postings.iter().enumerate() {
-            match &p.amount {
-                Some(amount) => {
-                    *sums_by_currency.entry(amount.currency.clone()).or_insert(Decimal::ZERO) += amount.number;
-                }
-                None => {
-                    if missing_amount_idx.is_some() {
-                        return Err(BalancingError {
-                            message: "Transaction has more than one posting with missing amount".to_string(),
-                        });
-                    }
-                    missing_amount_idx = Some(i);
-                }
+            if let Some(amount) = &p.amount {
+                *sums_by_currency.entry(amount.currency.clone()).or_insert(Decimal::ZERO) += amount.number;
+            } else if missing_amount_idx.is_none() {
+                missing_amount_idx = Some(i);
+            } else {
+                return Err(BalancingError {
+                    message: "Transaction has more than one posting with missing amount".to_string(),
+                });
             }
         }
 
         if let Some(idx) = missing_amount_idx {
-            // There's exactly one missing amount.
-            // We need to infer it. Beancount allows inference as long as there is only one non-zero sum across all currencies.
-            // Check if there is exactly 1 non-zero sum.
-            let non_zero_sums: Vec<(String, Decimal)> = sums_by_currency.clone().into_iter().filter(|(_, s)| !s.is_zero()).collect();
+            let missing_posting = postings.remove(idx);
+            let mut added = false;
 
-            if non_zero_sums.len() > 1 {
-                return Err(BalancingError {
-                    message: "Cannot infer missing amount: multiple currencies have non-zero sums".to_string(),
-                });
-            } else if non_zero_sums.is_empty() {
-                // All currencies are perfectly balanced, so the missing amount must be 0 in the "dominant" currency
-                // We'll just pick the first currency we saw, or if there were none, error out.
-                if sums_by_currency.is_empty() {
+            // Sort currencies to ensure deterministic ordering of inserted postings
+            let mut currencies: Vec<_> = sums_by_currency.keys().cloned().collect();
+            currencies.sort();
+
+            let mut insert_idx = idx;
+            for currency in &currencies {
+                let sum = sums_by_currency[currency];
+                if !sum.is_zero() {
+                    let mut new_posting = missing_posting.clone();
+                    new_posting.amount = Some(Amount {
+                        number: -sum,
+                        currency: currency.clone(),
+                    });
+                    postings.insert(insert_idx, new_posting);
+                    insert_idx += 1;
+                    added = true;
+                }
+            }
+
+            if !added {
+                if let Some(currency) = currencies.first() {
+                    let mut new_posting = missing_posting.clone();
+                    new_posting.amount = Some(Amount {
+                        number: Decimal::ZERO,
+                        currency: currency.clone(),
+                    });
+                    postings.insert(idx, new_posting);
+                } else {
                     return Err(BalancingError {
-                        message: "Cannot infer missing amount: no other amounts in transaction to balance against".to_string(),
+                        message: "Cannot infer missing amount: no currencies to balance against".to_string(),
                     });
                 }
-                let currency = sums_by_currency.into_iter().next().unwrap().0;
-                postings[idx].amount = Some(Amount {
-                    number: Decimal::ZERO,
-                    currency,
-                });
-            } else {
-                let (currency, sum) = non_zero_sums.into_iter().next().unwrap();
-                // The missing amount must be the negation of the sum to make the total 0.
-                postings[idx].amount = Some(Amount {
-                    number: -sum,
-                    currency,
-                });
             }
         } else {
             // All postings have amounts. Verify they sum to 0 for each currency.
@@ -216,3 +218,33 @@ mod tests {
         assert!(err.message.contains("more than one posting with missing amount"));
     }
 }
+
+    #[test]
+    fn test_infer_missing_amount_multiple_currencies() {
+        let ast_postings = vec![
+            ast::Posting {
+                flag: None,
+                account: "Assets:Checking".to_string(),
+                amount: Some(ast::Amount { number: "-10.00".to_string(), currency: "USD".to_string() }),
+            },
+            ast::Posting {
+                flag: None,
+                account: "Assets:Checking".to_string(),
+                amount: Some(ast::Amount { number: "-20.00".to_string(), currency: "EUR".to_string() }),
+            },
+            ast::Posting {
+                flag: None,
+                account: "Expenses:Food".to_string(),
+                amount: None,
+            },
+        ];
+
+        let txn = Transaction::try_from_ast("2023-01-01", "*", &None, &None, &ast_postings).unwrap();
+        assert_eq!(txn.postings.len(), 4);
+
+        let eur_posting = txn.postings.iter().find(|p| p.amount.as_ref().unwrap().currency == "EUR" && p.amount.as_ref().unwrap().number.is_sign_positive()).unwrap();
+        let usd_posting = txn.postings.iter().find(|p| p.amount.as_ref().unwrap().currency == "USD" && p.amount.as_ref().unwrap().number.is_sign_positive()).unwrap();
+
+        assert_eq!(eur_posting.amount.as_ref().unwrap().number, rust_decimal_macros::dec!(20.00));
+        assert_eq!(usd_posting.amount.as_ref().unwrap().number, rust_decimal_macros::dec!(10.00));
+    }

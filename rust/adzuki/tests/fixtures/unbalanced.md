@@ -12,3 +12,8 @@
   Expenses:Food
   Expenses:Drink
 ```
+
+2023-01-01 * "Test" "Infers multiple currencies correctly"
+  Assets:Checking -10.00 USD
+  Assets:Checking -20.00 EUR
+  Expenses:Food
