@@ -104,3 +104,35 @@ mod tests {
         println!("{:?}", tree);
     }
 }
+pub mod reports;
+
+#[uniffi::export]
+pub fn calculate_trial_balances(source: String) -> Vec<reports::AccountBalanceUi> {
+    let tree = parse_to_tree(source);
+    let mut core_transactions = Vec::new();
+
+    for node in tree.nodes {
+        if let ast::AstNode::Beancount { nodes, .. } = node {
+            for bc_node in nodes {
+                if let ast::BeancountNode::Transaction { date, flag, payee, narration, postings } = bc_node {
+                    if let Ok(txn) = core::Transaction::try_from_ast(&date, &flag, &payee, &narration, &postings) {
+                        core_transactions.push(txn);
+                    }
+                }
+            }
+        }
+    }
+
+    let balances = reports::calculate_trial_balances(&core_transactions);
+
+    balances.into_iter().map(|b| {
+        let mut balance_map = std::collections::HashMap::new();
+        for (k, v) in b.balances {
+            balance_map.insert(k, v.to_string());
+        }
+        reports::AccountBalanceUi {
+            account: b.account,
+            balances: balance_map,
+        }
+    }).collect()
+}
