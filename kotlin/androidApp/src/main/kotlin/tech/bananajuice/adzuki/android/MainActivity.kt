@@ -364,6 +364,9 @@ fun ReportsScreen(state: MainState) {
                 balances = computedBalances
             } catch (e: Exception) {
                 e.printStackTrace()
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Error reading balances: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
                 balances = emptyList()
             }
         }
