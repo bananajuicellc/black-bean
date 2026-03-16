@@ -635,6 +635,8 @@ internal object IntegrityCheckingUniffiLib {
         uniffiCheckContractApiVersion(this)
         uniffiCheckApiChecksums(this)
     }
+    external fun uniffi_adzuki_checksum_func_calculate_trial_balances(
+    ): Short
     external fun uniffi_adzuki_checksum_func_parse_to_tree(
     ): Short
     external fun ffi_adzuki_uniffi_contract_version(
@@ -650,6 +652,8 @@ internal object UniffiLib {
         Native.register(UniffiLib::class.java, findLibraryName(componentName = "adzuki"))
 
     }
+    external fun uniffi_adzuki_fn_func_calculate_trial_balances(`source`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
     external fun uniffi_adzuki_fn_func_parse_to_tree(`source`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     external fun ffi_adzuki_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus,
@@ -771,6 +775,9 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
+    if (lib.uniffi_adzuki_checksum_func_calculate_trial_balances() != 25838.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_adzuki_checksum_func_parse_to_tree() != 15978.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -967,6 +974,44 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
         val byteBuf = toUtf8(value)
         buf.putInt(byteBuf.limit())
         buf.put(byteBuf)
+    }
+}
+
+
+
+data class AccountBalanceUi (
+    var `account`: kotlin.String
+    ,
+    var `balances`: Map<kotlin.String, kotlin.String>
+
+){
+
+
+
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAccountBalanceUi: FfiConverterRustBuffer<AccountBalanceUi> {
+    override fun read(buf: ByteBuffer): AccountBalanceUi {
+        return AccountBalanceUi(
+            FfiConverterString.read(buf),
+            FfiConverterMapStringString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: AccountBalanceUi) = (
+            FfiConverterString.allocationSize(value.`account`) +
+            FfiConverterMapStringString.allocationSize(value.`balances`)
+    )
+
+    override fun write(value: AccountBalanceUi, buf: ByteBuffer) {
+            FfiConverterString.write(value.`account`, buf)
+            FfiConverterMapStringString.write(value.`balances`, buf)
     }
 }
 
@@ -1510,6 +1555,34 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeAccountBalanceUi: FfiConverterRustBuffer<List<AccountBalanceUi>> {
+    override fun read(buf: ByteBuffer): List<AccountBalanceUi> {
+        val len = buf.getInt()
+        return List<AccountBalanceUi>(len) {
+            FfiConverterTypeAccountBalanceUi.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<AccountBalanceUi>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeAccountBalanceUi.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<AccountBalanceUi>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeAccountBalanceUi.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypePosting: FfiConverterRustBuffer<List<Posting>> {
     override fun read(buf: ByteBuffer): List<Posting> {
         val len = buf.getInt()
@@ -1586,7 +1659,56 @@ public object FfiConverterSequenceTypeBeancountNode: FfiConverterRustBuffer<List
             FfiConverterTypeBeancountNode.write(it, buf)
         }
     }
-} fun `parseToTree`(`source`: kotlin.String): ParseTree {
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.String, kotlin.String>> {
+    override fun read(buf: ByteBuffer): Map<kotlin.String, kotlin.String> {
+        val len = buf.getInt()
+        return buildMap<kotlin.String, kotlin.String>(len) {
+            repeat(len) {
+                val k = FfiConverterString.read(buf)
+                val v = FfiConverterString.read(buf)
+                this[k] = v
+            }
+        }
+    }
+
+    override fun allocationSize(value: Map<kotlin.String, kotlin.String>): ULong {
+        val spaceForMapSize = 4UL
+        val spaceForChildren = value.map { (k, v) ->
+            FfiConverterString.allocationSize(k) +
+            FfiConverterString.allocationSize(v)
+        }.sum()
+        return spaceForMapSize + spaceForChildren
+    }
+
+    override fun write(value: Map<kotlin.String, kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        // The parens on `(k, v)` here ensure we're calling the right method,
+        // which is important for compatibility with older android devices.
+        // Ref https://blog.danlew.net/2017/03/16/kotlin-puzzler-whose-line-is-it-anyways/
+        value.forEach { (k, v) ->
+            FfiConverterString.write(k, buf)
+            FfiConverterString.write(v, buf)
+        }
+    }
+} fun `calculateTrialBalances`(`source`: kotlin.String): List<AccountBalanceUi> {
+            return FfiConverterSequenceTypeAccountBalanceUi.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adzuki_fn_func_calculate_trial_balances(
+
+        FfiConverterString.lower(`source`),_status)
+}
+    )
+    }
+
+ fun `parseToTree`(`source`: kotlin.String): ParseTree {
             return FfiConverterTypeParseTree.lift(
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_adzuki_fn_func_parse_to_tree(

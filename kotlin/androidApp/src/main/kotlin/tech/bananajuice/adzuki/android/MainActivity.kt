@@ -44,6 +44,12 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Tab
+import androidx.compose.runtime.mutableIntStateOf
+import uniffi.adzuki.calculateTrialBalances
+import uniffi.adzuki.AccountBalanceUi
+import androidx.compose.ui.text.font.FontWeight
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -293,6 +299,7 @@ fun FileListScreen(state: MainState, onIntent: (MainIntent) -> Unit) {
     val journalUri = (state.currentScreen as? Screen.FileList)?.journalUri ?: return
     val context = LocalContext.current
     val journalFolder = remember(journalUri) { DocumentFile.fromTreeUri(context, Uri.parse(journalUri)) }
+    var selectedTab by remember { mutableIntStateOf(0) }
 
     BackHandler { onIntent(MainIntent.NavigateBack) }
 
@@ -308,15 +315,81 @@ fun FileListScreen(state: MainState, onIntent: (MainIntent) -> Unit) {
             )
         }
     ) { padding ->
-        LazyColumn(modifier = Modifier.padding(padding).fillMaxSize()) {
-            items(state.files) { file ->
-                Text(
-                    text = file.name,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onIntent(MainIntent.OpenFile(file.uri, journalUri)) }
-                        .padding(16.dp)
-                )
+        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+            TabRow(selectedTabIndex = selectedTab) {
+                Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Files") })
+                Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Reports") })
+            }
+            if (selectedTab == 0) {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(state.files) { file ->
+                        Text(
+                            text = file.name,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onIntent(MainIntent.OpenFile(file.uri, journalUri)) }
+                                .padding(16.dp)
+                        )
+                    }
+                }
+            } else if (selectedTab == 1) {
+                ReportsScreen(state = state)
+            }
+        }
+    }
+}
+
+@Composable
+fun ReportsScreen(state: MainState) {
+    val mainFile = state.files.find { it.name == "main.beancount.md" }
+        ?: state.files.find { it.name == "main.beancount" }
+
+    if (mainFile == null) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("No main.beancount.md found in journal.")
+        }
+        return
+    }
+
+    val context = LocalContext.current
+    var balances by remember { mutableStateOf<List<AccountBalanceUi>?>(null) }
+
+    LaunchedEffect(mainFile.uri) {
+        kotlinx.coroutines.withContext(Dispatchers.IO) {
+            try {
+                val text = context.contentResolver.openInputStream(Uri.parse(mainFile.uri))?.use { inputStream ->
+                    inputStream.bufferedReader().use { it.readText() }
+                } ?: ""
+                val computedBalances = calculateTrialBalances(text)
+                balances = computedBalances
+            } catch (e: Exception) {
+                e.printStackTrace()
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Error reading balances: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+                balances = emptyList()
+            }
+        }
+    }
+
+    val currentBalances = balances
+    if (currentBalances == null) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("Loading balances...")
+        }
+    } else if (currentBalances.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("No balances found or error reading file.")
+        }
+    } else {
+        LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+            items(currentBalances) { balance ->
+                Column(modifier = Modifier.padding(bottom = 16.dp)) {
+                    Text(text = balance.account, fontWeight = FontWeight.Bold)
+                    balance.balances.forEach { (currency, amount) ->
+                        Text(text = "$amount $currency")
+                    }
+                }
             }
         }
     }
