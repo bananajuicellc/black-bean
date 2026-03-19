@@ -37,6 +37,8 @@ kotlin {
 android {
     namespace = "tech.bananajuice.adzuki.shared"
     compileSdk = 36
+    ndkVersion = "30.0.14904198"
+
     defaultConfig {
         minSdk = 24
     }

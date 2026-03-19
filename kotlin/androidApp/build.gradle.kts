@@ -24,6 +24,7 @@ uniffi {
 android {
     namespace = "tech.bananajuice.adzuki.android"
     compileSdk = 36
+    ndkVersion = "30.0.14904198"
 
     defaultConfig {
         applicationId = "tech.bananajuice.adzuki.android"
